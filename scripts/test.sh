@@ -1,13 +1,14 @@
 #!/bin/sh
 
-src="/var/log/pacman.log"
-exe="../target/debug/securepipe"
-pipe="pipe"
+script_dir=$(dirname $(realpath $0))
 
-cat "${src}" | ${exe} > "${pipe}" 2>enc.log &
+src="/var/log/pacman.log"
+exe="${script_dir}/../target/debug/securepipe"
+
+cat "${src}" | ${exe} &
 writer=$!
 
-${exe} -d < "${pipe}" >/dev/null 2>dec.log
+${exe} -d localhost >/dev/null 2>dec.log
 dec_ec=$?
 
 wait ${writer}

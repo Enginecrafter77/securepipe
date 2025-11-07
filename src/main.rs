@@ -1,8 +1,9 @@
-use std::{fs::File, io::{self, Read, Write}, net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream}, ops::DerefMut};
+use std::{fs::File, io::{self, Read, Write}, net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream}};
 
-use aes_gcm::{AeadCore, Aes256Gcm, KeyInit, Nonce, aead::{AeadMutInPlace, consts::U12, rand_core::SeedableRng}};
+use aes_gcm::{AeadCore, Aes256Gcm, KeyInit, Nonce, aead::{AeadMutInPlace, OsRng, consts::U12, rand_core::SeedableRng}};
 use dns_lookup::lookup_host;
 use getopts::Options;
+use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret};
 
 use crate::{rng::StdRngWrapper};
 
@@ -63,19 +64,6 @@ impl CryptPipeContext {
     }
 }
 
-macro_rules! extract_array {
-    ($n: literal, $a: expr) => {
-        {
-            let slice = $a.as_slice();
-            let mut array = [0u8; $n];
-            for i in 0..$n {
-                array[i] = slice[i];
-            }
-            array
-        }
-    };
-}
-
 fn resolve_name(name: &str) -> Result<IpAddr, io::Error> {
     let Some(addr) = lookup_host(name)?.find(|a| a.is_ipv4()) else {
         return Err(io::Error::new(io::ErrorKind::AddrNotAvailable, "No address available"));
@@ -98,13 +86,25 @@ fn obtain_socket(host: Option<String>, port: u16) -> Result<(TcpStream, SocketAd
     }
 }
 
-fn main() {
-    let key_v = hex::decode(std::env::var("SP_KEY").expect("SP_KEY env variable not set")).expect("Illegal value in SP_KEY");
-    let seed_v = hex::decode(std::env::var("SP_SEED").expect("SP_SEED env variable not set")).expect("Illegal value in SP_SEED");
-    let key = extract_array!(32, key_v);
-    let seed = extract_array!(32, seed_v);
+fn dh_kex(socket: &mut TcpStream) -> Result<SharedSecret, io::Error> {
+    let private = EphemeralSecret::random_from_rng(OsRng);
+    let public = PublicKey::from(&private);
 
+    // Send our key
+    socket.write_all(public.as_bytes())?;
+
+    // Receive their key
+    let mut peer_public_buffer = [0u8; 32];
+    socket.read_exact(&mut peer_public_buffer)?;
+
+    let peer_public = PublicKey::from(peer_public_buffer);
+
+    return Ok(private.diffie_hellman(&peer_public));
+}
+
+fn main() {
     let mut opts = Options::new();
+
     opts.optflag("h", "help", "Displays this help message");
     opts.optflag("d", "decrypt", "Designated decrypting end");
     opts.optopt("i", "input", "Read input from", "source");
@@ -127,6 +127,9 @@ fn main() {
 
     let mut boxed_socket = Box::new(socket);
 
+    let key = dh_kex(boxed_socket.as_mut()).expect("Key exchange failed");
+    let seed = dh_kex(boxed_socket.as_mut()).expect("Seed KEX failed");
+
     let mut src: Box<dyn Read> = match m.opt_str("i") {
         None => Box::new(io::stdin()),
         Some(filename) => Box::new(File::open(filename).expect("Input file open failed"))
@@ -137,7 +140,7 @@ fn main() {
         Some(filename) => Box::new(File::open(filename).expect("Output file open failed"))
     };
 
-    let mut ctx = CryptPipeContext::new(&key, &seed);
+    let mut ctx = CryptPipeContext::new(key.as_bytes(), seed.as_bytes());
     let mut blen: usize = 1;
     while blen > 0 {
         if m.opt_present("d") {

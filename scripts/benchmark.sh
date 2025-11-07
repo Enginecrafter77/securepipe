@@ -1,5 +1,12 @@
 #!/bin/sh
 
-exe=../target/debug/securepipe
+script_dir=$(dirname $(realpath $0))
 
-cat /dev/zero | pv | ${exe} | ${exe} -d >/dev/null
+exe="${script_dir}/../target/release/securepipe"
+
+${exe} -d >/dev/null &
+dec_pid=$!
+
+cat /dev/zero | pv | ${exe} localhost
+
+wait ${dec_pid}
