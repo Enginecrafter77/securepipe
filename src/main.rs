@@ -1,4 +1,4 @@
-use std::{fs::File, io::{self, Read, Write}, net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream}};
+use std::{fs::File, io::{self, Read, Write}, net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream}, ops::DerefMut};
 
 use aes_gcm::{AeadCore, Aes256Gcm, KeyInit, Nonce, aead::{AeadMutInPlace, consts::U12, rand_core::SeedableRng}};
 use dns_lookup::lookup_host;
@@ -25,11 +25,11 @@ impl CryptPipeContext {
         return Aes256Gcm::generate_nonce(&mut self.rng);
     }
 
-    fn encrypt_round(&mut self, src: &mut Box<dyn Read>, dst: &mut Box<TcpStream>) -> io::Result<usize> {
+    fn encrypt_round<I,O>(&mut self, src: &mut I, dst: &mut O) -> io::Result<usize> where I: Read, O: Write {
         let nonce = self.new_nonce();
 
         self.buffer.resize(self.default_buffer_size, 0);
-
+        
         let read_bytes = src.read(self.buffer.as_mut())?;
         if read_bytes == 0 {
             dst.write_all((0 as u32).to_be_bytes().as_slice())?;
@@ -44,7 +44,7 @@ impl CryptPipeContext {
         return Ok(self.buffer.len());
     }
 
-    fn decrypt_round(&mut self, src: &mut Box<TcpStream>, dst: &mut Box<dyn Write>) -> io::Result<usize> {
+    fn decrypt_round<I,O>(&mut self, src: &mut I, dst: &mut O) -> io::Result<usize> where I: Read, O: Write {
         let nonce = self.new_nonce();
 
         src.read_exact(&mut self.len_buffer)?;
