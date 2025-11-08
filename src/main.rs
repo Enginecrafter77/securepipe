@@ -1,71 +1,17 @@
 use std::{fs::File, io::{self, Read, Write}, net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream}};
 
-use aes_gcm::{AeadCore, Aes256Gcm, KeyInit, Nonce, aead::{AeadMutInPlace, OsRng, consts::U12, rand_core::SeedableRng}};
+use aes_gcm::aead::OsRng;
 use dns_lookup::lookup_host;
 use getopts::Options;
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret};
 
-use crate::{rng::StdRngWrapper};
+use crate::pipe::{DecryptPipe, EncryptPipe, Pipe};
 
 mod rng;
+mod pipe;
 
 const DEFAULT_BUFFER_SIZE: usize = 4096;
 const DEFAULT_PORT: u16 = 4096;
-
-struct CryptPipeContext {
-    cipher: Aes256Gcm,
-    rng: StdRngWrapper,
-    len_buffer: [u8; 4],
-    buffer: Vec<u8>,
-    encrypt_buffer_length: usize
-}
-
-impl CryptPipeContext {
-    fn new(key: &[u8; 32], seed: &[u8; 32]) -> Self {
-        return Self { cipher: Aes256Gcm::new(key.into()), rng: StdRngWrapper::from_seed(seed.clone()), buffer: Vec::new(), len_buffer: [0u8; 4], encrypt_buffer_length: DEFAULT_BUFFER_SIZE }
-    }
-
-    fn new_nonce(&mut self) -> Nonce<U12> {
-        return Aes256Gcm::generate_nonce(&mut self.rng);
-    }
-
-    fn encrypt_round<I,O>(&mut self, src: &mut I, dst: &mut O) -> io::Result<usize> where I: Read, O: Write {
-        let nonce = self.new_nonce();
-
-        self.buffer.resize(self.encrypt_buffer_length, 0);
-        
-        let read_bytes = src.read(self.buffer.as_mut())?;
-        if read_bytes == 0 {
-            dst.write_all((0 as u32).to_be_bytes().as_slice())?;
-            return Ok(0);
-        }
-        self.buffer.resize(read_bytes, 0);
-        self.cipher.encrypt_in_place(&nonce, b"", &mut self.buffer).expect("Encryption failed");
-
-        dst.write_all((self.buffer.len() as u32).to_be_bytes().as_slice())?;
-        dst.write_all(self.buffer.as_slice())?;
-
-        return Ok(self.buffer.len());
-    }
-
-    fn decrypt_round<I,O>(&mut self, src: &mut I, dst: &mut O) -> io::Result<usize> where I: Read, O: Write {
-        let nonce = self.new_nonce();
-
-        src.read_exact(&mut self.len_buffer)?;
-        let block_length = u32::from_be_bytes(self.len_buffer) as usize;
-        if block_length == 0 {
-            return Ok(0);
-        }
-
-        self.buffer.resize(block_length, 0);
-        src.read_exact(self.buffer.as_mut())?;
-
-        self.cipher.decrypt_in_place(&nonce, b"", &mut self.buffer).expect("Decryption failed");
-        dst.write_all(&self.buffer.as_slice())?;
-
-        return Ok(self.buffer.len());
-    }
-}
 
 fn resolve_name(name: &str) -> Result<IpAddr, io::Error> {
     let Some(addr) = lookup_host(name)?.find(|a| a.is_ipv4()) else {
@@ -143,15 +89,13 @@ fn main() {
         Some(filename) => Box::new(File::open(filename).expect("Output file open failed"))
     };
 
-    let mut ctx = CryptPipeContext::new(key.as_bytes(), seed.as_bytes());
-    ctx.encrypt_buffer_length = m.opt_str("b").map(|x| x.parse::<usize>().expect("String parsing failed")).unwrap_or(DEFAULT_BUFFER_SIZE);
-
-    let mut blen: usize = ctx.encrypt_buffer_length;
-    while blen > 0 {
-        if m.opt_present("d") {
-            blen = ctx.decrypt_round(&mut boxed_socket, &mut dest).expect("IO error");
-        } else {
-            blen = ctx.encrypt_round(&mut src, &mut boxed_socket).expect("IO error");
-        }
+    if m.opt_present("d") {
+        let mut pipe = DecryptPipe::new(key.as_bytes(), seed.as_bytes(), boxed_socket.as_mut(), dest.as_mut());
+        pipe.pump_all().expect("IO error");
+    }
+    else {
+        let mut pipe = EncryptPipe::new(key.as_bytes(), seed.as_bytes(), src.as_mut(), boxed_socket.as_mut());
+        pipe.read_length = m.opt_str("b").map(|x| x.parse::<usize>().expect("Parsing block length failed")).unwrap_or(DEFAULT_BUFFER_SIZE);
+        pipe.pump_all().expect("IO error");
     }
 }
