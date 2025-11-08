@@ -9,17 +9,20 @@ use crate::{rng::StdRngWrapper};
 
 mod rng;
 
+const DEFAULT_BUFFER_SIZE: usize = 4096;
+const DEFAULT_PORT: u16 = 4096;
+
 struct CryptPipeContext {
     cipher: Aes256Gcm,
     rng: StdRngWrapper,
     len_buffer: [u8; 4],
     buffer: Vec<u8>,
-    default_buffer_size: usize
+    encrypt_buffer_length: usize
 }
 
 impl CryptPipeContext {
     fn new(key: &[u8; 32], seed: &[u8; 32]) -> Self {
-        return Self { cipher: Aes256Gcm::new(key.into()), rng: StdRngWrapper::from_seed(seed.clone()), buffer: Vec::new(), len_buffer: [0u8; 4], default_buffer_size: 4096 }
+        return Self { cipher: Aes256Gcm::new(key.into()), rng: StdRngWrapper::from_seed(seed.clone()), buffer: Vec::new(), len_buffer: [0u8; 4], encrypt_buffer_length: DEFAULT_BUFFER_SIZE }
     }
 
     fn new_nonce(&mut self) -> Nonce<U12> {
@@ -29,7 +32,7 @@ impl CryptPipeContext {
     fn encrypt_round<I,O>(&mut self, src: &mut I, dst: &mut O) -> io::Result<usize> where I: Read, O: Write {
         let nonce = self.new_nonce();
 
-        self.buffer.resize(self.default_buffer_size, 0);
+        self.buffer.resize(self.encrypt_buffer_length, 0);
         
         let read_bytes = src.read(self.buffer.as_mut())?;
         if read_bytes == 0 {
@@ -119,7 +122,7 @@ fn main() {
         return;
     }
 
-    let port = m.opt_str("p").map(|x| x.parse::<u16>().expect("Parsing port number failed")).unwrap_or(4096);
+    let port = m.opt_str("p").map(|x| x.parse::<u16>().expect("Parsing port number failed")).unwrap_or(DEFAULT_PORT);
     let Ok((socket, _)) = obtain_socket(m.free.get(1).cloned(), port) else {
         writeln!(io::stderr(), "Unable to estabilish connection").expect("STDERR write failed");
         return;
@@ -141,7 +144,9 @@ fn main() {
     };
 
     let mut ctx = CryptPipeContext::new(key.as_bytes(), seed.as_bytes());
-    let mut blen: usize = 1;
+    ctx.encrypt_buffer_length = m.opt_str("b").map(|x| x.parse::<usize>().expect("String parsing failed")).unwrap_or(DEFAULT_BUFFER_SIZE);
+
+    let mut blen: usize = ctx.encrypt_buffer_length;
     while blen > 0 {
         if m.opt_present("d") {
             blen = ctx.decrypt_round(&mut boxed_socket, &mut dest).expect("IO error");
