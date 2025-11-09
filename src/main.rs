@@ -108,10 +108,12 @@ fn main() {
     };
 
     if m.opt_present("d") {
+        info!("Decrypting socket stream to output...");
         let mut pipe = DecryptPipe::new(key.as_bytes(), seed.as_bytes(), &mut socket, dest.as_mut());
         pipe.pump_all().expect("IO error");
     }
     else {
+        info!("Encrypting input to socket stream...");
         let mut pipe = EncryptPipe::new(key.as_bytes(), seed.as_bytes(), src.as_mut(), &mut socket);
         pipe.read_length = m.opt_str("b").map(|x| x.parse::<usize>().expect("Parsing block length failed")).unwrap_or(DEFAULT_BUFFER_SIZE);
         pipe.pump_all().expect("IO error");
