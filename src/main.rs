@@ -35,16 +35,16 @@ fn obtain_socket(host: Option<String>, port: u16) -> Result<(TcpStream, SocketAd
     }
 }
 
-fn dh_kex(socket: &mut TcpStream) -> Result<SharedSecret, io::Error> {
+fn dh_kex<C>(channel: &mut C) -> Result<SharedSecret, io::Error> where C: Read+Write {
     let private = EphemeralSecret::random_from_rng(OsRng);
     let public = PublicKey::from(&private);
 
     // Send our key
-    socket.write_all(public.as_bytes())?;
+    channel.write_all(public.as_bytes())?;
 
     // Receive their key
     let mut peer_public_buffer = [0u8; 32];
-    socket.read_exact(&mut peer_public_buffer)?;
+    channel.read_exact(&mut peer_public_buffer)?;
 
     let peer_public = PublicKey::from(peer_public_buffer);
 
@@ -69,15 +69,13 @@ fn main() {
     }
 
     let port = m.opt_str("p").map(|x| x.parse::<u16>().expect("Parsing port number failed")).unwrap_or(DEFAULT_PORT);
-    let Ok((socket, _)) = obtain_socket(m.free.get(1).cloned(), port) else {
+    let Ok((mut socket, _)) = obtain_socket(m.free.get(1).cloned(), port) else {
         writeln!(io::stderr(), "Unable to estabilish connection").expect("STDERR write failed");
         return;
     };
 
-    let mut boxed_socket = Box::new(socket);
-
-    let key = dh_kex(boxed_socket.as_mut()).expect("Key exchange failed");
-    let seed = dh_kex(boxed_socket.as_mut()).expect("Seed KEX failed");
+    let key = dh_kex(&mut socket).expect("Key exchange failed");
+    let seed = dh_kex(&mut socket).expect("Seed KEX failed");
 
     let mut src: Box<dyn Read> = match m.opt_str("i") {
         None => Box::new(io::stdin()),
@@ -90,11 +88,11 @@ fn main() {
     };
 
     if m.opt_present("d") {
-        let mut pipe = DecryptPipe::new(key.as_bytes(), seed.as_bytes(), boxed_socket.as_mut(), dest.as_mut());
+        let mut pipe = DecryptPipe::new(key.as_bytes(), seed.as_bytes(), &mut socket, dest.as_mut());
         pipe.pump_all().expect("IO error");
     }
     else {
-        let mut pipe = EncryptPipe::new(key.as_bytes(), seed.as_bytes(), src.as_mut(), boxed_socket.as_mut());
+        let mut pipe = EncryptPipe::new(key.as_bytes(), seed.as_bytes(), src.as_mut(), &mut socket);
         pipe.read_length = m.opt_str("b").map(|x| x.parse::<usize>().expect("Parsing block length failed")).unwrap_or(DEFAULT_BUFFER_SIZE);
         pipe.pump_all().expect("IO error");
     }
