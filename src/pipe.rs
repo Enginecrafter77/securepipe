@@ -103,6 +103,7 @@ impl<'a> Pipe for DecryptPipe<'a> {
     }
 }
 
+#[cfg(test)]
 mod test {
     use std::io::{self, Read, Write};
 
