@@ -155,7 +155,7 @@ fn main() {
 
     let mut dest: Box<dyn Write> = match m.opt_str("o") {
         None => Box::new(io::stdout()),
-        Some(filename) => Box::new(File::open(filename).expect("Output file open failed"))
+        Some(filename) => Box::new(File::create(filename).expect("Output file open failed"))
     };
 
     if m.opt_present("d") {
