@@ -3,6 +3,7 @@ use std::{fs::File, io::{self, Read, Write}, net::{IpAddr, Ipv4Addr, SocketAddr,
 use aes_gcm::aead::OsRng;
 use dns_lookup::lookup_host;
 use getopts::Options;
+use log::{error, info};
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret};
 
 use crate::pipe::{DecryptPipe, EncryptPipe, Pipe};
@@ -24,12 +25,15 @@ fn obtain_socket(host: Option<String>, port: u16) -> Result<(TcpStream, SocketAd
     match host {
         None => { // server
             let serversocket = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port))?;
+            info!("Listening on port 0.0.0.0:{}", port);
             return serversocket.accept();
         },
         Some(hostname) => {
             let addr = resolve_name(hostname.as_str())?;
+            info!("Connecting to {} ({}) port {}", hostname, addr, port);
             let sockaddr = SocketAddr::new(addr, port);
             let socket = TcpStream::connect(sockaddr)?;
+            info!("Connection estabilished");
             return Ok((socket, sockaddr));
         }
     }
@@ -51,6 +55,12 @@ fn dh_kex<C>(channel: &mut C) -> Result<SharedSecret, io::Error> where C: Read+W
     return Ok(private.diffie_hellman(&peer_public));
 }
 
+macro_rules! printerrln {
+    ($($arg:tt)*) => {
+        writeln!(io::stderr(), $($arg)*).expect("STDERR write failed");
+    };
+}
+
 fn main() {
     let mut opts = Options::new();
 
@@ -60,21 +70,31 @@ fn main() {
     opts.optopt("o", "output", "Write output to", "dest");
     opts.optopt("p", "port", "Use the given port", "port");
     opts.optopt("b", "block-size", "The size of plaintext blocks", "block-size");
+    opts.optflagmulti("v", "verbose", "Add 1 verbosity level");
+    opts.optflag("q", "quiet", "Suppresses all logging output");
 
     let m = opts.parse(std::env::args()).expect("Parsing arguments failed");
 
+    stderrlog::new()
+        .module(module_path!())
+        .quiet(m.opt_present("q"))
+        .verbosity(m.opt_count("v"))
+        .init().expect("Logging framework init failed");
+
     if m.opt_present("h") {
-        writeln!(io::stderr(), "{}\n{}", opts.short_usage("securepipe"), opts.usage("A simple pipe for secure network transfers")).expect("Writing help failed");
+        printerrln!("{}\n{}", opts.short_usage("securepipe"), opts.usage("A simple pipe for secure network transfers"));
         return;
     }
 
     let port = m.opt_str("p").map(|x| x.parse::<u16>().expect("Parsing port number failed")).unwrap_or(DEFAULT_PORT);
     let Ok((mut socket, _)) = obtain_socket(m.free.get(1).cloned(), port) else {
-        writeln!(io::stderr(), "Unable to estabilish connection").expect("STDERR write failed");
+        error!("Unable to estabilish TCP connection");
         return;
     };
 
+    info!("Performing encryption key DH exchange");
     let key = dh_kex(&mut socket).expect("Key exchange failed");
+    info!("Performing rng seed DH exchange");
     let seed = dh_kex(&mut socket).expect("Seed KEX failed");
 
     let mut src: Box<dyn Read> = match m.opt_str("i") {
