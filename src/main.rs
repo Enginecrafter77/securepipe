@@ -1,3 +1,21 @@
+/*
+securepipe - a fast and secure means of transferring data between networked machines
+Copyright (C) 2025 Enginecrafter77
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 use std::{fs::File, io::{self, Read, Write}, net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream}};
 
 use aes_gcm::aead::OsRng;
@@ -92,6 +110,8 @@ A simple example use case:
 (client) machine2: securepipe -vv -d machine1.local > messages.log
 ";
 
+const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 fn main() {
     let mut opts = Options::new();
 
@@ -113,7 +133,7 @@ fn main() {
         .init().expect("Logging framework init failed");
 
     if m.opt_present("h") {
-        printerrln!("{} [host]\n{}{}", opts.short_usage("securepipe"), opts.usage("A simple pipe for secure network transfers."), DESCRIPTION);
+        printerrln!("{} [host]\n{}{}\nSecurepipe version: {}", opts.short_usage("securepipe"), opts.usage("A simple pipe for secure network transfers."), DESCRIPTION, PKG_VERSION);
         return;
     }
 
