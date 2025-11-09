@@ -82,7 +82,7 @@ fn main() {
         .init().expect("Logging framework init failed");
 
     if m.opt_present("h") {
-        printerrln!("{}\n{}", opts.short_usage("securepipe"), opts.usage("A simple pipe for secure network transfers"));
+        printerrln!("{} [host]\n{}", opts.short_usage("securepipe"), opts.usage("A simple pipe for secure network transfers."));
         return;
     }
 
