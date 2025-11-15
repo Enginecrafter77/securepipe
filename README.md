@@ -1,15 +1,15 @@
 # securepipe
-A simple command line utility used for quickly transferring large volume of data between networked machines.
+A simple command line utility for fast encrypted network data transfers.
 
 ## Overview
 The general working principle of securepipe is best illustrated with the following diagram:
 
 ```
-/------\           /------------\                        /---------------\            /------\
-| data | ===STDIN> | securepipe | =~~=Encrypted data=~~= | securepipe -d | STDOUT===> | data |
-\------/           \------------/                        \---------------/            \------/
+                 +------------+                        +---------------+
+[data] ===STDIN> | securepipe | =~~=Encrypted data=~~= | securepipe -d | STDOUT===> [data]
+                 +------------+                        +---------------+
 
-<-------------Host1-------------> <-------Network------> <---------------Host2--------------->
+<------------Host1------------> <-------Network------> <--------------Host2-------------->
 ```
 
 On one machine, securepipe runs in encrypting mode, where plaintext data is read from standard input, and encrypted data is sent over the network.
