@@ -56,9 +56,9 @@ pub struct DecryptPipe<'a> {
 
 impl<'a> EncryptPipe<'a> {
     pub fn new(key: &[u8; 32], seed: &[u8; 32], src: &'a mut dyn Read, dst: &'a mut dyn Write) -> Self {
-        return Self {
+        Self {
             cipher: Aes256Gcm::new(key.into()),
-            rng: StdRngWrapper::from_seed(seed.clone()),
+            rng: StdRngWrapper::from_seed(*seed),
             buffer: Vec::new(),
             read_length: DEFAULT_BUFFER_SIZE,
             src,
@@ -75,7 +75,7 @@ impl<'a> Pipe for EncryptPipe<'a> {
         
         let read_bytes = self.src.read(self.buffer.as_mut())?;
         if read_bytes == 0 {
-            self.dst.write_all((0 as u32).to_be_bytes().as_slice())?;
+            self.dst.write_all(0u32.to_be_bytes().as_slice())?;
             return Ok(0);
         }
         self.buffer.resize(read_bytes, 0);
@@ -84,15 +84,15 @@ impl<'a> Pipe for EncryptPipe<'a> {
         self.dst.write_all((self.buffer.len() as u32).to_be_bytes().as_slice())?;
         self.dst.write_all(self.buffer.as_slice())?;
 
-        return Ok(self.buffer.len());
+        Ok(self.buffer.len())
     }
 }
 
 impl<'a> DecryptPipe<'a> {
     pub fn new(key: &[u8; 32], seed: &[u8; 32], src: &'a mut dyn Read, dst: &'a mut dyn Write) -> Self {
-        return Self {
+        Self {
             cipher: Aes256Gcm::new(key.into()),
-            rng: StdRngWrapper::from_seed(seed.clone()),
+            rng: StdRngWrapper::from_seed(*seed),
             buffer: Vec::new(),
             len_buffer: [0u8; 4],
             src,
@@ -115,9 +115,9 @@ impl<'a> Pipe for DecryptPipe<'a> {
         self.src.read_exact(self.buffer.as_mut())?;
 
         self.cipher.decrypt_in_place(&nonce, b"", &mut self.buffer).expect("Decryption failed");
-        self.dst.write_all(&self.buffer.as_slice())?;
+        self.dst.write_all(self.buffer.as_slice())?;
 
-        return Ok(self.buffer.len());
+        Ok(self.buffer.len())
     }
 }
 
@@ -138,28 +138,26 @@ mod test {
 
     impl BufferedPipe {
         fn new(size: usize) -> Self {
-            let mut buffer = Vec::new();
-            buffer.resize(size, 0u8);
-            return Self { buffer, size, read_ptr: 0, write_ptr: 0 };
+            Self { buffer: vec![0; size], size, read_ptr: 0, write_ptr: 0 }
         }
 
         fn available(&self) -> usize {
-            return self.write_ptr - self.read_ptr;
+            self.write_ptr - self.read_ptr
         }
 
         fn free(&self) -> usize {
-            return self.size - self.available();
+            self.size - self.available()
         }
     }
 
     impl Read for BufferedPipe {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
             let read_len = buf.len().min(self.available());
-            for i in 0..read_len {
-                buf[i] = self.buffer.get(self.read_ptr % self.size).copied().expect("Invalid index");
+            for byte in buf.iter_mut().take(read_len) {
+                *byte = self.buffer.get(self.read_ptr % self.size).copied().expect("Invalid index");
                 self.read_ptr += 1;
             }
-            return Ok(read_len);
+            Ok(read_len)
         }
 
         fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
@@ -168,19 +166,19 @@ mod test {
             }
             assert!(buf.len() <= self.available());
             self.read(buf)?;
-            return Ok(());
+            Ok(())
         }
     }
 
     impl Write for BufferedPipe {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
             let write_len = buf.len().min(self.free());
-            for i in 0..write_len {
+            for byte in buf.iter().take(write_len) {
                 let slot = self.buffer.get_mut(self.write_ptr % self.size).expect("Invalid index");
-                *slot = buf[i];
+                *slot = *byte;
                 self.write_ptr += 1;
             }
-            return Ok(write_len);
+            Ok(write_len)
         }
 
         fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
@@ -188,12 +186,12 @@ mod test {
                 return Err(io::Error::new(io::ErrorKind::WouldBlock, "Buffer overflow"));
             }
             self.write(buf)?;
-            return Ok(());
+            Ok(())
         }
     
         fn flush(&mut self) -> std::io::Result<()> {
             // NOOP
-            return Ok(());
+            Ok(())
         }
     }
 

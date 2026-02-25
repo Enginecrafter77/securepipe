@@ -36,7 +36,7 @@ fn resolve_name(name: &str) -> Result<IpAddr, io::Error> {
     let Some(addr) = lookup_host(name)?.find(|a| a.is_ipv4()) else {
         return Err(io::Error::new(io::ErrorKind::AddrNotAvailable, "No address available"));
     };
-    return Ok(addr);
+    Ok(addr)
 }
 
 fn obtain_socket(host: Option<String>, port: u16) -> Result<(TcpStream, SocketAddr), io::Error> {
@@ -44,7 +44,7 @@ fn obtain_socket(host: Option<String>, port: u16) -> Result<(TcpStream, SocketAd
         None => { // server
             let serversocket = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port))?;
             info!("Listening on port 0.0.0.0:{}", port);
-            return serversocket.accept();
+            serversocket.accept()
         },
         Some(hostname) => {
             let addr = resolve_name(hostname.as_str())?;
@@ -52,7 +52,7 @@ fn obtain_socket(host: Option<String>, port: u16) -> Result<(TcpStream, SocketAd
             let sockaddr = SocketAddr::new(addr, port);
             let socket = TcpStream::connect(sockaddr)?;
             info!("Connection estabilished");
-            return Ok((socket, sockaddr));
+            Ok((socket, sockaddr))
         }
     }
 }
@@ -70,7 +70,7 @@ fn dh_kex<C>(channel: &mut C) -> Result<SharedSecret, io::Error> where C: Read+W
 
     let peer_public = PublicKey::from(peer_public_buffer);
 
-    return Ok(private.diffie_hellman(&peer_public));
+    Ok(private.diffie_hellman(&peer_public))
 }
 
 macro_rules! printerrln {
