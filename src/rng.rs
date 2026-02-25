@@ -18,18 +18,23 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 use std::num::NonZeroU32;
 
-use aes_gcm::aead::rand_core::{CryptoRng, RngCore, SeedableRng, Error as AesRandError};
-use rand::{RngCore as RandRngCore, TryRngCore as RandTryRngCore, SeedableRng as RandSeedableRng, rngs::StdRng};
+use aes_gcm::aead::rand_core::{CryptoRng, Error as AesRandError, RngCore, SeedableRng};
+use rand::{
+    RngCore as RandRngCore, SeedableRng as RandSeedableRng, TryRngCore as RandTryRngCore,
+    rngs::StdRng,
+};
 
 pub struct StdRngWrapper {
-    wrapped: StdRng
+    wrapped: StdRng,
 }
 
 impl SeedableRng for StdRngWrapper {
     type Seed = [u8; 32];
 
     fn from_seed(seed: Self::Seed) -> Self {
-        Self { wrapped: StdRng::from_seed(seed) }
+        Self {
+            wrapped: StdRng::from_seed(seed),
+        }
     }
 }
 
@@ -49,9 +54,9 @@ impl RngCore for StdRngWrapper {
     }
 
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), AesRandError> {
-        self.wrapped.try_fill_bytes(dest).map_err(|_| {
-            AesRandError::from(NonZeroU32::new(42).unwrap())
-        })?;
+        self.wrapped
+            .try_fill_bytes(dest)
+            .map_err(|_| AesRandError::from(NonZeroU32::new(42).unwrap()))?;
         Ok(())
     }
 }

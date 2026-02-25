@@ -20,9 +20,12 @@ const DEFAULT_BUFFER_SIZE: usize = 4096;
 
 use std::io::{self, Read, Write};
 
-use aes_gcm::{AeadCore, Aes256Gcm, KeyInit, aead::{AeadMutInPlace, rand_core::SeedableRng}};
+use aes_gcm::{
+    AeadCore, Aes256Gcm, KeyInit,
+    aead::{AeadMutInPlace, rand_core::SeedableRng},
+};
 
-use crate::{rng::StdRngWrapper};
+use crate::rng::StdRngWrapper;
 
 pub trait Pipe {
     fn pump(&mut self) -> io::Result<usize>;
@@ -55,14 +58,19 @@ pub struct DecryptPipe<'a> {
 }
 
 impl<'a> EncryptPipe<'a> {
-    pub fn new(key: &[u8; 32], seed: &[u8; 32], src: &'a mut dyn Read, dst: &'a mut dyn Write) -> Self {
+    pub fn new(
+        key: &[u8; 32],
+        seed: &[u8; 32],
+        src: &'a mut dyn Read,
+        dst: &'a mut dyn Write,
+    ) -> Self {
         Self {
             cipher: Aes256Gcm::new(key.into()),
             rng: StdRngWrapper::from_seed(*seed),
             buffer: Vec::new(),
             read_length: DEFAULT_BUFFER_SIZE,
             src,
-            dst
+            dst,
         }
     }
 }
@@ -72,16 +80,19 @@ impl<'a> Pipe for EncryptPipe<'a> {
         let nonce = Aes256Gcm::generate_nonce(&mut self.rng);
 
         self.buffer.resize(self.read_length, 0);
-        
+
         let read_bytes = self.src.read(self.buffer.as_mut())?;
         if read_bytes == 0 {
             self.dst.write_all(0u32.to_be_bytes().as_slice())?;
             return Ok(0);
         }
         self.buffer.resize(read_bytes, 0);
-        self.cipher.encrypt_in_place(&nonce, b"", &mut self.buffer).expect("Encryption failed");
+        self.cipher
+            .encrypt_in_place(&nonce, b"", &mut self.buffer)
+            .expect("Encryption failed");
 
-        self.dst.write_all((self.buffer.len() as u32).to_be_bytes().as_slice())?;
+        self.dst
+            .write_all((self.buffer.len() as u32).to_be_bytes().as_slice())?;
         self.dst.write_all(self.buffer.as_slice())?;
 
         Ok(self.buffer.len())
@@ -89,14 +100,19 @@ impl<'a> Pipe for EncryptPipe<'a> {
 }
 
 impl<'a> DecryptPipe<'a> {
-    pub fn new(key: &[u8; 32], seed: &[u8; 32], src: &'a mut dyn Read, dst: &'a mut dyn Write) -> Self {
+    pub fn new(
+        key: &[u8; 32],
+        seed: &[u8; 32],
+        src: &'a mut dyn Read,
+        dst: &'a mut dyn Write,
+    ) -> Self {
         Self {
             cipher: Aes256Gcm::new(key.into()),
             rng: StdRngWrapper::from_seed(*seed),
             buffer: Vec::new(),
             len_buffer: [0u8; 4],
             src,
-            dst
+            dst,
         }
     }
 }
@@ -114,7 +130,9 @@ impl<'a> Pipe for DecryptPipe<'a> {
         self.buffer.resize(block_length, 0);
         self.src.read_exact(self.buffer.as_mut())?;
 
-        self.cipher.decrypt_in_place(&nonce, b"", &mut self.buffer).expect("Decryption failed");
+        self.cipher
+            .decrypt_in_place(&nonce, b"", &mut self.buffer)
+            .expect("Decryption failed");
         self.dst.write_all(self.buffer.as_slice())?;
 
         Ok(self.buffer.len())
@@ -133,12 +151,17 @@ mod test {
         buffer: Vec<u8>,
         size: usize,
         read_ptr: usize,
-        write_ptr: usize
+        write_ptr: usize,
     }
 
     impl BufferedPipe {
         fn new(size: usize) -> Self {
-            Self { buffer: vec![0; size], size, read_ptr: 0, write_ptr: 0 }
+            Self {
+                buffer: vec![0; size],
+                size,
+                read_ptr: 0,
+                write_ptr: 0,
+            }
         }
 
         fn available(&self) -> usize {
@@ -154,7 +177,11 @@ mod test {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
             let read_len = buf.len().min(self.available());
             for byte in buf.iter_mut().take(read_len) {
-                *byte = self.buffer.get(self.read_ptr % self.size).copied().expect("Invalid index");
+                *byte = self
+                    .buffer
+                    .get(self.read_ptr % self.size)
+                    .copied()
+                    .expect("Invalid index");
                 self.read_ptr += 1;
             }
             Ok(read_len)
@@ -162,7 +189,10 @@ mod test {
 
         fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
             if buf.len() > self.available() {
-                return Err(io::Error::new(io::ErrorKind::WouldBlock, "Buffer underflow"));
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "Buffer underflow",
+                ));
             }
             assert!(buf.len() <= self.available());
             self.read(buf)?;
@@ -174,7 +204,10 @@ mod test {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
             let write_len = buf.len().min(self.free());
             for byte in buf.iter().take(write_len) {
-                let slot = self.buffer.get_mut(self.write_ptr % self.size).expect("Invalid index");
+                let slot = self
+                    .buffer
+                    .get_mut(self.write_ptr % self.size)
+                    .expect("Invalid index");
                 *slot = *byte;
                 self.write_ptr += 1;
             }
@@ -188,7 +221,7 @@ mod test {
             self.write(buf)?;
             Ok(())
         }
-    
+
         fn flush(&mut self) -> std::io::Result<()> {
             // NOOP
             Ok(())
@@ -279,7 +312,9 @@ mod test {
         let mut sec_pipe = BufferedPipe::new(256);
         let mut out_pipe = BufferedPipe::new(256);
 
-        in_pipe.write_all(b"Hello world!").expect("In pipe write failed");
+        in_pipe
+            .write_all(b"Hello world!")
+            .expect("In pipe write failed");
 
         // Encrypt stage
         {
@@ -294,7 +329,9 @@ mod test {
         }
 
         let mut out = String::new();
-        out_pipe.read_to_string(&mut out).expect("Output readback failed");
+        out_pipe
+            .read_to_string(&mut out)
+            .expect("Output readback failed");
 
         assert_eq!("Hello world!", out);
     }
@@ -317,9 +354,13 @@ mod test {
             let in_length = (OsRng.try_next_u32().expect("RNG failed") % 200) as usize;
             input.resize(in_length, 0);
             output.resize(in_length, 0);
-            OsRng.try_fill_bytes(input.as_mut_slice()).expect("RNG failed");
+            OsRng
+                .try_fill_bytes(input.as_mut_slice())
+                .expect("RNG failed");
 
-            in_pipe.write_all(input.as_slice()).expect("In pipe write failed");
+            in_pipe
+                .write_all(input.as_slice())
+                .expect("In pipe write failed");
 
             // Encrypt stage
             {
@@ -333,7 +374,9 @@ mod test {
                 dec_pipe.pump_all().expect("Decryption failed");
             }
 
-            let read_len = out_pipe.read(output.as_mut_slice()).expect("Output readback failed");
+            let read_len = out_pipe
+                .read(output.as_mut_slice())
+                .expect("Output readback failed");
 
             assert_eq!(read_len, in_length);
             assert_eq!(input, output);
