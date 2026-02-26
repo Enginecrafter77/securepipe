@@ -20,10 +20,9 @@ const DEFAULT_MESSAGE_BLOCK_SIZE: usize = 4096;
 
 use std::io::{self, Read, Write};
 
-use aes_gcm::{
-    AeadCore, AeadInPlace, Aes256Gcm, KeyInit, Nonce,
-    aead::{OsRng, consts::U12},
-};
+use aes_gcm::{AeadInPlace, Aes256Gcm, KeyInit};
+
+use crate::nonce::Nonce;
 
 pub trait Pump {
     fn pump(&mut self) -> io::Result<usize>;
@@ -40,6 +39,7 @@ pub trait Pump {
 pub struct EncryptingPump<'a> {
     cipher: Aes256Gcm,
     buffer: Vec<u8>,
+    nonce: Nonce,
     src: &'a mut dyn Read,
     dst: &'a mut dyn Write,
     pub message_block_size: usize,
@@ -48,6 +48,7 @@ pub struct EncryptingPump<'a> {
 pub struct DecryptingPump<'a> {
     cipher: Aes256Gcm,
     buffer: Vec<u8>,
+    nonce: Nonce,
     src: &'a mut dyn Read,
     dst: &'a mut dyn Write,
 }
@@ -57,6 +58,7 @@ impl<'a> EncryptingPump<'a> {
         Self {
             cipher: Aes256Gcm::new(key.into()),
             buffer: Vec::new(),
+            nonce: Nonce::default(),
             message_block_size: DEFAULT_MESSAGE_BLOCK_SIZE,
             src,
             dst,
@@ -66,8 +68,6 @@ impl<'a> EncryptingPump<'a> {
 
 impl<'a> Pump for EncryptingPump<'a> {
     fn pump(&mut self) -> io::Result<usize> {
-        let nonce = Aes256Gcm::generate_nonce(OsRng);
-
         self.buffer.resize(self.message_block_size, 0);
 
         let read_bytes = self.src.read(self.buffer.as_mut())?;
@@ -77,12 +77,12 @@ impl<'a> Pump for EncryptingPump<'a> {
         }
         self.buffer.resize(read_bytes, 0);
         self.cipher
-            .encrypt_in_place(&nonce, b"", &mut self.buffer)
+            .encrypt_in_place(self.nonce.as_aes(), b"", &mut self.buffer)
             .expect("Encryption failed");
+        self.nonce.increment();
 
         self.dst
             .write_all((self.buffer.len() as u32).to_be_bytes().as_slice())?;
-        self.dst.write_all(&nonce)?;
         self.dst.write_all(self.buffer.as_slice())?;
 
         Ok(self.buffer.len())
@@ -94,6 +94,7 @@ impl<'a> DecryptingPump<'a> {
         Self {
             cipher: Aes256Gcm::new(key.into()),
             buffer: Vec::new(),
+            nonce: Nonce::default(),
             src,
             dst,
         }
@@ -110,17 +111,15 @@ impl<'a> Pump for DecryptingPump<'a> {
             return Ok(0);
         }
 
-        let mut nonce = Nonce::<U12>::default();
-        self.src.read_exact(&mut nonce)?;
-
         self.buffer.resize(payload_length, 0);
         self.src.read_exact(self.buffer.as_mut())?;
 
         self.cipher
-            .decrypt_in_place(&nonce, b"", &mut self.buffer)
+            .decrypt_in_place(self.nonce.as_aes(), b"", &mut self.buffer)
             .expect("Decryption failed");
-        self.dst.write_all(self.buffer.as_slice())?;
+        self.nonce.increment();
 
+        self.dst.write_all(self.buffer.as_slice())?;
         Ok(self.buffer.len())
     }
 }
@@ -332,7 +331,7 @@ mod test {
 
         let mut input = Vec::new();
         let mut output = Vec::new();
-        for _ in 0..256 {
+        for _ in 0..4096 {
             let in_length = (OsRng.try_next_u32().expect("RNG failed") % 200) as usize;
             input.resize(in_length, 0);
             output.resize(in_length, 0);

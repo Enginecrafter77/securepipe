@@ -30,6 +30,7 @@ use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret};
 
 use crate::pump::{DecryptingPump, EncryptingPump, Pump};
 
+mod nonce;
 mod pump;
 
 const DEFAULT_BUFFER_SIZE: usize = 4096;
