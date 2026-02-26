@@ -27,7 +27,7 @@ use aes_gcm::{
 
 use crate::rng::StdRngWrapper;
 
-pub trait Pipe {
+pub trait Pump {
     fn pump(&mut self) -> io::Result<usize>;
 
     fn pump_all(&mut self) -> io::Result<()> {
@@ -39,7 +39,7 @@ pub trait Pipe {
     }
 }
 
-pub struct EncryptPipe<'a> {
+pub struct EncryptingPump<'a> {
     cipher: Aes256Gcm,
     rng: StdRngWrapper,
     buffer: Vec<u8>,
@@ -48,7 +48,7 @@ pub struct EncryptPipe<'a> {
     pub read_length: usize,
 }
 
-pub struct DecryptPipe<'a> {
+pub struct DecryptingPump<'a> {
     cipher: Aes256Gcm,
     rng: StdRngWrapper,
     buffer: Vec<u8>,
@@ -57,7 +57,7 @@ pub struct DecryptPipe<'a> {
     dst: &'a mut dyn Write,
 }
 
-impl<'a> EncryptPipe<'a> {
+impl<'a> EncryptingPump<'a> {
     pub fn new(
         key: &[u8; 32],
         seed: &[u8; 32],
@@ -75,7 +75,7 @@ impl<'a> EncryptPipe<'a> {
     }
 }
 
-impl<'a> Pipe for EncryptPipe<'a> {
+impl<'a> Pump for EncryptingPump<'a> {
     fn pump(&mut self) -> io::Result<usize> {
         let nonce = Aes256Gcm::generate_nonce(&mut self.rng);
 
@@ -99,7 +99,7 @@ impl<'a> Pipe for EncryptPipe<'a> {
     }
 }
 
-impl<'a> DecryptPipe<'a> {
+impl<'a> DecryptingPump<'a> {
     pub fn new(
         key: &[u8; 32],
         seed: &[u8; 32],
@@ -117,7 +117,7 @@ impl<'a> DecryptPipe<'a> {
     }
 }
 
-impl<'a> Pipe for DecryptPipe<'a> {
+impl<'a> Pump for DecryptingPump<'a> {
     fn pump(&mut self) -> io::Result<usize> {
         let nonce = Aes256Gcm::generate_nonce(&mut self.rng);
 
@@ -145,7 +145,7 @@ mod test {
 
     use rand::{TryRngCore, rngs::OsRng};
 
-    use crate::pipe::{DecryptPipe, EncryptPipe, Pipe};
+    use crate::pump::{DecryptingPump, EncryptingPump, Pump};
 
     struct BufferedPipe {
         buffer: Vec<u8>,
@@ -318,13 +318,13 @@ mod test {
 
         // Encrypt stage
         {
-            let mut enc_pipe = EncryptPipe::new(&key, &seed, &mut in_pipe, &mut sec_pipe);
+            let mut enc_pipe = EncryptingPump::new(&key, &seed, &mut in_pipe, &mut sec_pipe);
             enc_pipe.pump_all().expect("Encryption failed");
         }
 
         // Decrypt stage
         {
-            let mut dec_pipe = DecryptPipe::new(&key, &seed, &mut sec_pipe, &mut out_pipe);
+            let mut dec_pipe = DecryptingPump::new(&key, &seed, &mut sec_pipe, &mut out_pipe);
             dec_pipe.pump_all().expect("Decryption failed");
         }
 
@@ -364,13 +364,13 @@ mod test {
 
             // Encrypt stage
             {
-                let mut enc_pipe = EncryptPipe::new(&key, &seed, &mut in_pipe, &mut sec_pipe);
+                let mut enc_pipe = EncryptingPump::new(&key, &seed, &mut in_pipe, &mut sec_pipe);
                 enc_pipe.pump_all().expect("Encryption failed");
             }
 
             // Decrypt stage
             {
-                let mut dec_pipe = DecryptPipe::new(&key, &seed, &mut sec_pipe, &mut out_pipe);
+                let mut dec_pipe = DecryptingPump::new(&key, &seed, &mut sec_pipe, &mut out_pipe);
                 dec_pipe.pump_all().expect("Decryption failed");
             }
 
