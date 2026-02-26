@@ -16,16 +16,14 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-const DEFAULT_BUFFER_SIZE: usize = 4096;
+const DEFAULT_MESSAGE_BLOCK_SIZE: usize = 4096;
 
 use std::io::{self, Read, Write};
 
 use aes_gcm::{
-    AeadCore, Aes256Gcm, KeyInit,
-    aead::{AeadMutInPlace, rand_core::SeedableRng},
+    AeadCore, AeadInPlace, Aes256Gcm, KeyInit, Nonce,
+    aead::{OsRng, consts::U12},
 };
-
-use crate::rng::StdRngWrapper;
 
 pub trait Pump {
     fn pump(&mut self) -> io::Result<usize>;
@@ -41,34 +39,25 @@ pub trait Pump {
 
 pub struct EncryptingPump<'a> {
     cipher: Aes256Gcm,
-    rng: StdRngWrapper,
     buffer: Vec<u8>,
     src: &'a mut dyn Read,
     dst: &'a mut dyn Write,
-    pub read_length: usize,
+    pub message_block_size: usize,
 }
 
 pub struct DecryptingPump<'a> {
     cipher: Aes256Gcm,
-    rng: StdRngWrapper,
     buffer: Vec<u8>,
-    len_buffer: [u8; 4],
     src: &'a mut dyn Read,
     dst: &'a mut dyn Write,
 }
 
 impl<'a> EncryptingPump<'a> {
-    pub fn new(
-        key: &[u8; 32],
-        seed: &[u8; 32],
-        src: &'a mut dyn Read,
-        dst: &'a mut dyn Write,
-    ) -> Self {
+    pub fn new(key: &[u8; 32], src: &'a mut dyn Read, dst: &'a mut dyn Write) -> Self {
         Self {
             cipher: Aes256Gcm::new(key.into()),
-            rng: StdRngWrapper::from_seed(*seed),
             buffer: Vec::new(),
-            read_length: DEFAULT_BUFFER_SIZE,
+            message_block_size: DEFAULT_MESSAGE_BLOCK_SIZE,
             src,
             dst,
         }
@@ -77,9 +66,9 @@ impl<'a> EncryptingPump<'a> {
 
 impl<'a> Pump for EncryptingPump<'a> {
     fn pump(&mut self) -> io::Result<usize> {
-        let nonce = Aes256Gcm::generate_nonce(&mut self.rng);
+        let nonce = Aes256Gcm::generate_nonce(OsRng);
 
-        self.buffer.resize(self.read_length, 0);
+        self.buffer.resize(self.message_block_size, 0);
 
         let read_bytes = self.src.read(self.buffer.as_mut())?;
         if read_bytes == 0 {
@@ -93,6 +82,7 @@ impl<'a> Pump for EncryptingPump<'a> {
 
         self.dst
             .write_all((self.buffer.len() as u32).to_be_bytes().as_slice())?;
+        self.dst.write_all(&nonce)?;
         self.dst.write_all(self.buffer.as_slice())?;
 
         Ok(self.buffer.len())
@@ -100,17 +90,10 @@ impl<'a> Pump for EncryptingPump<'a> {
 }
 
 impl<'a> DecryptingPump<'a> {
-    pub fn new(
-        key: &[u8; 32],
-        seed: &[u8; 32],
-        src: &'a mut dyn Read,
-        dst: &'a mut dyn Write,
-    ) -> Self {
+    pub fn new(key: &[u8; 32], src: &'a mut dyn Read, dst: &'a mut dyn Write) -> Self {
         Self {
             cipher: Aes256Gcm::new(key.into()),
-            rng: StdRngWrapper::from_seed(*seed),
             buffer: Vec::new(),
-            len_buffer: [0u8; 4],
             src,
             dst,
         }
@@ -119,15 +102,18 @@ impl<'a> DecryptingPump<'a> {
 
 impl<'a> Pump for DecryptingPump<'a> {
     fn pump(&mut self) -> io::Result<usize> {
-        let nonce = Aes256Gcm::generate_nonce(&mut self.rng);
+        let mut len_buffer = [0u8; 4];
+        self.src.read_exact(&mut len_buffer)?;
 
-        self.src.read_exact(&mut self.len_buffer)?;
-        let block_length = u32::from_be_bytes(self.len_buffer) as usize;
-        if block_length == 0 {
+        let payload_length = u32::from_be_bytes(len_buffer) as usize;
+        if payload_length == 0 {
             return Ok(0);
         }
 
-        self.buffer.resize(block_length, 0);
+        let mut nonce = Nonce::<U12>::default();
+        self.src.read_exact(&mut nonce)?;
+
+        self.buffer.resize(payload_length, 0);
         self.src.read_exact(self.buffer.as_mut())?;
 
         self.cipher
@@ -303,10 +289,8 @@ mod test {
     #[test]
     fn test_encryption_pipe_simple() {
         let mut key = [0u8; 32];
-        let mut seed = [0u8; 32];
 
         OsRng.try_fill_bytes(&mut key).expect("RNG failed");
-        OsRng.try_fill_bytes(&mut seed).expect("RNG failed");
 
         let mut in_pipe = BufferedPipe::new(256);
         let mut sec_pipe = BufferedPipe::new(256);
@@ -318,13 +302,13 @@ mod test {
 
         // Encrypt stage
         {
-            let mut enc_pipe = EncryptingPump::new(&key, &seed, &mut in_pipe, &mut sec_pipe);
+            let mut enc_pipe = EncryptingPump::new(&key, &mut in_pipe, &mut sec_pipe);
             enc_pipe.pump_all().expect("Encryption failed");
         }
 
         // Decrypt stage
         {
-            let mut dec_pipe = DecryptingPump::new(&key, &seed, &mut sec_pipe, &mut out_pipe);
+            let mut dec_pipe = DecryptingPump::new(&key, &mut sec_pipe, &mut out_pipe);
             dec_pipe.pump_all().expect("Decryption failed");
         }
 
@@ -339,10 +323,8 @@ mod test {
     #[test]
     fn test_encryption_pipe_looped() {
         let mut key = [0u8; 32];
-        let mut seed = [0u8; 32];
 
         OsRng.try_fill_bytes(&mut key).expect("RNG failed");
-        OsRng.try_fill_bytes(&mut seed).expect("RNG failed");
 
         let mut in_pipe = BufferedPipe::new(256);
         let mut sec_pipe = BufferedPipe::new(256);
@@ -364,13 +346,13 @@ mod test {
 
             // Encrypt stage
             {
-                let mut enc_pipe = EncryptingPump::new(&key, &seed, &mut in_pipe, &mut sec_pipe);
+                let mut enc_pipe = EncryptingPump::new(&key, &mut in_pipe, &mut sec_pipe);
                 enc_pipe.pump_all().expect("Encryption failed");
             }
 
             // Decrypt stage
             {
-                let mut dec_pipe = DecryptingPump::new(&key, &seed, &mut sec_pipe, &mut out_pipe);
+                let mut dec_pipe = DecryptingPump::new(&key, &mut sec_pipe, &mut out_pipe);
                 dec_pipe.pump_all().expect("Decryption failed");
             }
 

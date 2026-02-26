@@ -31,7 +31,6 @@ use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret};
 use crate::pump::{DecryptingPump, EncryptingPump, Pump};
 
 mod pump;
-mod rng;
 
 const DEFAULT_BUFFER_SIZE: usize = 4096;
 const DEFAULT_PORT: u16 = 4096;
@@ -173,8 +172,6 @@ fn main() {
 
     info!("Performing encryption key DH exchange");
     let key = dh_kex(&mut socket).expect("Key exchange failed");
-    info!("Performing rng seed DH exchange");
-    let seed = dh_kex(&mut socket).expect("Seed KEX failed");
 
     let mut src: Box<dyn Read> = match m.opt_str("i") {
         None => Box::new(io::stdin()),
@@ -188,14 +185,12 @@ fn main() {
 
     if m.opt_present("d") {
         info!("Decrypting socket stream to output...");
-        let mut pipe =
-            DecryptingPump::new(key.as_bytes(), seed.as_bytes(), &mut socket, dest.as_mut());
+        let mut pipe = DecryptingPump::new(key.as_bytes(), &mut socket, dest.as_mut());
         pipe.pump_all().expect("IO error");
     } else {
         info!("Encrypting input to socket stream...");
-        let mut pipe =
-            EncryptingPump::new(key.as_bytes(), seed.as_bytes(), src.as_mut(), &mut socket);
-        pipe.read_length = m
+        let mut pipe = EncryptingPump::new(key.as_bytes(), src.as_mut(), &mut socket);
+        pipe.message_block_size = m
             .opt_str("b")
             .map(|x| x.parse::<usize>().expect("Parsing block length failed"))
             .unwrap_or(DEFAULT_BUFFER_SIZE);
