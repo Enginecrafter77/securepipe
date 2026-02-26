@@ -23,7 +23,14 @@ impl Nonce {
     }
 
     pub fn increment(&mut self) {
-        *self = self.add(Nonce::from(1));
+        let mut carry = true;
+        let mut index = 11;
+        while carry {
+            let (new_val, new_carry) = self.bytes[index].carrying_add(0, carry);
+            self.bytes[index] = new_val;
+            carry = new_carry;
+            index -= 1;
+        }
     }
 
     #[allow(deprecated)] // not our fault that aes_gcm uses old GenericArray library
