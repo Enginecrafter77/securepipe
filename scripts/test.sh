@@ -8,7 +8,7 @@ exe="${script_dir}/../target/debug/securepipe"
 cat "${src}" | ${exe} &
 writer=$!
 
-${exe} -d localhost >/dev/null 2>dec.log
+${exe} -d localhost >dec.out 2>dec.log
 dec_ec=$?
 
 wait ${writer}
@@ -25,4 +25,13 @@ then
     echo "Encryption endpoint exited abnormally (${enc_ec}). See enc.log for more details." >&2
     rc=$((rc+2))
 fi
+
+if ! cmp -s "${src}" "dec.out"
+then
+    echo "TEST FAILURE: Outputs differ" >&2
+    rc=254
+else
+    rm -f dec.out dec.log
+fi
+
 exit ${rc}

@@ -19,6 +19,14 @@ impl BufferedPipe {
         }
     }
 
+    pub fn total_read(&self) -> usize {
+        self.read_ptr
+    }
+
+    pub fn total_written(&self) -> usize {
+        self.write_ptr
+    }
+
     pub fn size(&self) -> usize {
         self.size
     }

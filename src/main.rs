@@ -35,7 +35,7 @@ mod filter;
 mod nonce;
 mod pump;
 
-const DEFAULT_BUFFER_SIZE: usize = 4096;
+const DEFAULT_BUFFER_SIZE: usize = 65535;
 const DEFAULT_PORT: u16 = 4096;
 
 fn resolve_name(name: &str) -> Result<IpAddr, io::Error> {
@@ -139,6 +139,7 @@ fn main() {
         "The size of plaintext blocks",
         "block-size",
     );
+    opts.optflag("z", "compress", "Use LZ4 compression for network transfer");
     opts.optflagmulti("v", "verbose", "Add 1 verbosity level");
     opts.optflag("q", "quiet", "Suppresses all logging output");
 
@@ -197,6 +198,7 @@ fn main() {
             .opt_str("b")
             .map(|x| x.parse::<usize>().expect("Parsing block length failed"))
             .unwrap_or(DEFAULT_BUFFER_SIZE);
+        pipe.compression = m.opt_present("z");
         pipe.pump_all().expect("IO error");
     }
 }

@@ -20,8 +20,11 @@ const DEFAULT_MESSAGE_BLOCK_SIZE: usize = 32 * 1024;
 
 use std::io::{Read, Write};
 
+use lz4::block::CompressionMode;
+
 use crate::filter::{
     BlockFilter,
+    compress::{LZ4DecodingFilter, LZ4EncodingFilter},
     crypt::{Aes256Key, DecryptFilter, EncryptFilter},
 };
 
@@ -41,15 +44,19 @@ pub struct EncodingPump<'a> {
     src: &'a mut dyn Read,
     dst: &'a mut dyn Write,
     buffer: Vec<u8>,
-    enc: EncryptFilter,
+    encryptor: EncryptFilter,
+    compressor: LZ4EncodingFilter,
     pub message_block_size: usize,
+    pub compression: bool,
 }
 
 pub struct DecodingPump<'a> {
     src: &'a mut dyn Read,
     dst: &'a mut dyn Write,
     buffer: Vec<u8>,
-    dec: DecryptFilter,
+    decryptor: DecryptFilter,
+    decompressor: LZ4DecodingFilter,
+    pub compression: bool,
 }
 
 impl<'a> EncodingPump<'a> {
@@ -58,8 +65,10 @@ impl<'a> EncodingPump<'a> {
             src,
             dst,
             buffer: Vec::with_capacity(DEFAULT_MESSAGE_BLOCK_SIZE),
-            enc: EncryptFilter::new(key),
+            encryptor: EncryptFilter::new(key),
+            compressor: LZ4EncodingFilter::new(CompressionMode::DEFAULT),
             message_block_size: DEFAULT_MESSAGE_BLOCK_SIZE,
+            compression: false,
         }
     }
 }
@@ -70,7 +79,9 @@ impl<'a> DecodingPump<'a> {
             src,
             dst,
             buffer: Vec::with_capacity(DEFAULT_MESSAGE_BLOCK_SIZE),
-            dec: DecryptFilter::new(key),
+            decryptor: DecryptFilter::new(key),
+            decompressor: LZ4DecodingFilter::new(),
+            compression: false,
         }
     }
 }
@@ -85,7 +96,11 @@ impl<'a> Pump for EncodingPump<'a> {
             return Ok(0);
         }
         self.buffer.resize(read_bytes, 0);
-        self.enc.transform(&mut self.buffer)?;
+
+        if self.compression {
+            self.compressor.transform(&mut self.buffer)?;
+        }
+        self.encryptor.transform(&mut self.buffer)?;
 
         let block_length = self.buffer.len();
         self.dst
@@ -107,7 +122,10 @@ impl<'a> Pump for DecodingPump<'a> {
         self.buffer.resize(block_len as usize, 0);
         self.src.read_exact(&mut self.buffer)?;
 
-        self.dec.transform(&mut self.buffer)?;
+        self.decryptor.transform(&mut self.buffer)?;
+        if self.compression {
+            self.decompressor.transform(&mut self.buffer)?;
+        }
 
         self.dst.write_all(&self.buffer)?;
 
@@ -129,7 +147,6 @@ mod test {
     #[test]
     fn test_encryption_pipe_simple() {
         let mut key = [0u8; 32];
-
         OsRng.try_fill_bytes(&mut key).expect("RNG failed");
 
         let mut in_pipe = BufferedPipe::new(256);
@@ -163,17 +180,16 @@ mod test {
     #[test]
     fn test_encryption_pipe_looped() {
         let mut key = [0u8; 32];
-
         OsRng.try_fill_bytes(&mut key).expect("RNG failed");
 
-        let mut in_pipe = BufferedPipe::new(256);
-        let mut sec_pipe = BufferedPipe::new(256);
-        let mut out_pipe = BufferedPipe::new(256);
+        let mut in_pipe = BufferedPipe::new(1024);
+        let mut sec_pipe = BufferedPipe::new(2048);
+        let mut out_pipe = BufferedPipe::new(1024);
 
         let mut input = Vec::new();
         let mut output = Vec::new();
-        for _ in 0..4096 {
-            let in_length = (OsRng.try_next_u32().expect("RNG failed") % 200) as usize;
+        for _ in 0..256 {
+            let in_length = (OsRng.try_next_u32().expect("RNG failed") % 1020) as usize + 4;
             input.resize(in_length, 0);
             output.resize(in_length, 0);
             OsRng
