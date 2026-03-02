@@ -16,18 +16,19 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-const DEFAULT_MESSAGE_BLOCK_SIZE: usize = 4096;
+const DEFAULT_MESSAGE_BLOCK_SIZE: usize = 32 * 1024;
 
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 
-use aes_gcm::{AeadInPlace, Aes256Gcm, KeyInit};
-
-use crate::nonce::Nonce;
+use crate::filter::{
+    BlockFilter,
+    crypt::{Aes256Key, DecryptFilter, EncryptFilter},
+};
 
 pub trait Pump {
-    fn pump(&mut self) -> io::Result<usize>;
+    fn pump(&mut self) -> anyhow::Result<usize>;
 
-    fn pump_all(&mut self) -> io::Result<()> {
+    fn pump_all(&mut self) -> anyhow::Result<()> {
         loop {
             if self.pump()? == 0 {
                 return Ok(());
@@ -36,254 +37,94 @@ pub trait Pump {
     }
 }
 
-pub struct EncryptingPump<'a> {
-    cipher: Aes256Gcm,
-    buffer: Vec<u8>,
-    nonce: Nonce,
+pub struct EncodingPump<'a> {
     src: &'a mut dyn Read,
     dst: &'a mut dyn Write,
+    buffer: Vec<u8>,
+    enc: EncryptFilter,
     pub message_block_size: usize,
 }
 
-pub struct DecryptingPump<'a> {
-    cipher: Aes256Gcm,
-    buffer: Vec<u8>,
-    nonce: Nonce,
+pub struct DecodingPump<'a> {
     src: &'a mut dyn Read,
     dst: &'a mut dyn Write,
+    buffer: Vec<u8>,
+    dec: DecryptFilter,
 }
 
-impl<'a> EncryptingPump<'a> {
-    pub fn new(key: &[u8; 32], src: &'a mut dyn Read, dst: &'a mut dyn Write) -> Self {
+impl<'a> EncodingPump<'a> {
+    pub fn new(key: &Aes256Key, src: &'a mut dyn Read, dst: &'a mut dyn Write) -> Self {
         Self {
-            cipher: Aes256Gcm::new(key.into()),
-            buffer: Vec::new(),
-            nonce: Nonce::default(),
-            message_block_size: DEFAULT_MESSAGE_BLOCK_SIZE,
             src,
             dst,
+            buffer: Vec::with_capacity(DEFAULT_MESSAGE_BLOCK_SIZE),
+            enc: EncryptFilter::new(key),
+            message_block_size: DEFAULT_MESSAGE_BLOCK_SIZE,
         }
     }
 }
 
-impl<'a> Pump for EncryptingPump<'a> {
-    fn pump(&mut self) -> io::Result<usize> {
+impl<'a> DecodingPump<'a> {
+    pub fn new(key: &Aes256Key, src: &'a mut dyn Read, dst: &'a mut dyn Write) -> Self {
+        Self {
+            src,
+            dst,
+            buffer: Vec::with_capacity(DEFAULT_MESSAGE_BLOCK_SIZE),
+            dec: DecryptFilter::new(key),
+        }
+    }
+}
+
+impl<'a> Pump for EncodingPump<'a> {
+    fn pump(&mut self) -> anyhow::Result<usize> {
         self.buffer.resize(self.message_block_size, 0);
 
-        let read_bytes = self.src.read(self.buffer.as_mut())?;
+        let read_bytes = self.src.read(&mut self.buffer)?;
         if read_bytes == 0 {
             self.dst.write_all(0u32.to_be_bytes().as_slice())?;
             return Ok(0);
         }
         self.buffer.resize(read_bytes, 0);
-        self.cipher
-            .encrypt_in_place(self.nonce.as_aes(), b"", &mut self.buffer)
-            .expect("Encryption failed");
-        self.nonce.increment();
+        self.enc.transform(&mut self.buffer)?;
 
+        let block_length = self.buffer.len();
         self.dst
-            .write_all((self.buffer.len() as u32).to_be_bytes().as_slice())?;
-        self.dst.write_all(self.buffer.as_slice())?;
+            .write_all((block_length as u32).to_be_bytes().as_slice())?;
+        self.dst.write_all(&self.buffer)?;
 
-        Ok(self.buffer.len())
+        Ok(block_length)
     }
 }
 
-impl<'a> DecryptingPump<'a> {
-    pub fn new(key: &[u8; 32], src: &'a mut dyn Read, dst: &'a mut dyn Write) -> Self {
-        Self {
-            cipher: Aes256Gcm::new(key.into()),
-            buffer: Vec::new(),
-            nonce: Nonce::default(),
-            src,
-            dst,
-        }
-    }
-}
-
-impl<'a> Pump for DecryptingPump<'a> {
-    fn pump(&mut self) -> io::Result<usize> {
-        let mut len_buffer = [0u8; 4];
-        self.src.read_exact(&mut len_buffer)?;
-
-        let payload_length = u32::from_be_bytes(len_buffer) as usize;
-        if payload_length == 0 {
+impl<'a> Pump for DecodingPump<'a> {
+    fn pump(&mut self) -> anyhow::Result<usize> {
+        let mut len_buf = [0u8; 4];
+        self.src.read_exact(&mut len_buf)?;
+        let block_len = u32::from_be_bytes(len_buf);
+        if block_len == 0 {
             return Ok(0);
         }
+        self.buffer.resize(block_len as usize, 0);
+        self.src.read_exact(&mut self.buffer)?;
 
-        self.buffer.resize(payload_length, 0);
-        self.src.read_exact(self.buffer.as_mut())?;
+        self.dec.transform(&mut self.buffer)?;
 
-        self.cipher
-            .decrypt_in_place(self.nonce.as_aes(), b"", &mut self.buffer)
-            .expect("Decryption failed");
-        self.nonce.increment();
+        self.dst.write_all(&self.buffer)?;
 
-        self.dst.write_all(self.buffer.as_slice())?;
         Ok(self.buffer.len())
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::io::{self, Read, Write};
+    use std::io::{Read, Write};
 
     use rand::{TryRngCore, rngs::OsRng};
 
-    use crate::pump::{DecryptingPump, EncryptingPump, Pump};
-
-    struct BufferedPipe {
-        buffer: Vec<u8>,
-        size: usize,
-        read_ptr: usize,
-        write_ptr: usize,
-    }
-
-    impl BufferedPipe {
-        fn new(size: usize) -> Self {
-            Self {
-                buffer: vec![0; size],
-                size,
-                read_ptr: 0,
-                write_ptr: 0,
-            }
-        }
-
-        fn available(&self) -> usize {
-            self.write_ptr - self.read_ptr
-        }
-
-        fn free(&self) -> usize {
-            self.size - self.available()
-        }
-    }
-
-    impl Read for BufferedPipe {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            let read_len = buf.len().min(self.available());
-            for byte in buf.iter_mut().take(read_len) {
-                *byte = self
-                    .buffer
-                    .get(self.read_ptr % self.size)
-                    .copied()
-                    .expect("Invalid index");
-                self.read_ptr += 1;
-            }
-            Ok(read_len)
-        }
-
-        fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
-            if buf.len() > self.available() {
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "Buffer underflow",
-                ));
-            }
-            assert!(buf.len() <= self.available());
-            self.read(buf)?;
-            Ok(())
-        }
-    }
-
-    impl Write for BufferedPipe {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            let write_len = buf.len().min(self.free());
-            for byte in buf.iter().take(write_len) {
-                let slot = self
-                    .buffer
-                    .get_mut(self.write_ptr % self.size)
-                    .expect("Invalid index");
-                *slot = *byte;
-                self.write_ptr += 1;
-            }
-            Ok(write_len)
-        }
-
-        fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
-            if buf.len() > self.free() {
-                return Err(io::Error::new(io::ErrorKind::WouldBlock, "Buffer overflow"));
-            }
-            self.write(buf)?;
-            Ok(())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            // NOOP
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn test_buffered_pipe_simple() {
-        let mut orig = [0u8; 32];
-        let mut piped = [0u8; 32];
-        OsRng.try_fill_bytes(&mut orig).expect("RNG failed");
-
-        let mut pipe = BufferedPipe::new(256);
-
-        pipe.write_all(&orig).expect("Pipe write failed");
-        pipe.read_exact(&mut piped).expect("Pipe read failed");
-        assert_eq!(orig, piped);
-    }
-
-    #[test]
-    fn test_buffered_pipe_looping() {
-        let mut orig = [0u8; 32];
-        let mut piped = [0u8; 32];
-        OsRng.try_fill_bytes(&mut orig).expect("RNG failed");
-
-        let mut pipe = BufferedPipe::new(256);
-
-        for _ in 0..16 {
-            pipe.write_all(&orig).expect("Pipe write failed");
-            pipe.read_exact(&mut piped).expect("Pipe read failed");
-            assert_eq!(orig, piped);
-        }
-    }
-
-    #[test]
-    fn test_buffered_pipe_overflow_cap() {
-        let orig = [42u8; 32];
-
-        let mut pipe = BufferedPipe::new(16);
-        let written = pipe.write(&orig).expect("Pipe write failed");
-
-        assert_eq!(written, 16);
-    }
-
-    #[test]
-    fn test_buffered_pipe_overflow_err() {
-        let orig = [42u8; 32];
-
-        let mut pipe = BufferedPipe::new(16);
-        let written = pipe.write_all(&orig);
-
-        assert!(written.is_err());
-    }
-
-    #[test]
-    fn test_buffered_pipe_underflow_cap() {
-        let orig = [42u8; 32];
-        let mut piped = [0u8; 64];
-
-        let mut pipe = BufferedPipe::new(256);
-        pipe.write_all(&orig).expect("Pipe write failed");
-        let read = pipe.read(&mut piped).expect("Pipe read failed");
-
-        assert_eq!(read, 32);
-    }
-
-    #[test]
-    fn test_buffered_pipe_underflow_err() {
-        let orig = [42u8; 32];
-        let mut piped = [0u8; 64];
-
-        let mut pipe = BufferedPipe::new(256);
-        pipe.write_all(&orig).expect("Pipe write failed");
-        let res = pipe.read_exact(&mut piped);
-
-        assert!(res.is_err());
-    }
+    use crate::{
+        buffer::BufferedPipe,
+        pump::{DecodingPump, EncodingPump, Pump},
+    };
 
     #[test]
     fn test_encryption_pipe_simple() {
@@ -301,13 +142,13 @@ mod test {
 
         // Encrypt stage
         {
-            let mut enc_pipe = EncryptingPump::new(&key, &mut in_pipe, &mut sec_pipe);
+            let mut enc_pipe = EncodingPump::new(&key, &mut in_pipe, &mut sec_pipe);
             enc_pipe.pump_all().expect("Encryption failed");
         }
 
         // Decrypt stage
         {
-            let mut dec_pipe = DecryptingPump::new(&key, &mut sec_pipe, &mut out_pipe);
+            let mut dec_pipe = DecodingPump::new(&key, &mut sec_pipe, &mut out_pipe);
             dec_pipe.pump_all().expect("Decryption failed");
         }
 
@@ -345,13 +186,13 @@ mod test {
 
             // Encrypt stage
             {
-                let mut enc_pipe = EncryptingPump::new(&key, &mut in_pipe, &mut sec_pipe);
+                let mut enc_pipe = EncodingPump::new(&key, &mut in_pipe, &mut sec_pipe);
                 enc_pipe.pump_all().expect("Encryption failed");
             }
 
             // Decrypt stage
             {
-                let mut dec_pipe = DecryptingPump::new(&key, &mut sec_pipe, &mut out_pipe);
+                let mut dec_pipe = DecodingPump::new(&key, &mut sec_pipe, &mut out_pipe);
                 dec_pipe.pump_all().expect("Decryption failed");
             }
 
