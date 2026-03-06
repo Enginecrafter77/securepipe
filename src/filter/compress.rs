@@ -134,6 +134,19 @@ mod test {
     }
 
     #[test]
+    fn test_empty_encode_decode() {
+        let mut dec = LZ4DecodingFilter::new();
+        let mut enc = LZ4EncodingFilter::new(CompressionMode::FAST(8));
+
+        let mut buffer = Vec::with_capacity(16);
+
+        enc.transform(&mut buffer).expect("Encode failed");
+        dec.transform(&mut buffer).expect("Decode failed");
+
+        assert_eq!(buffer.len(), 0);
+    }
+
+    #[test]
     fn test_repetetive_encode_decode() {
         let mut dec = LZ4DecodingFilter::new();
         let mut enc = LZ4EncodingFilter::new(CompressionMode::FAST(8));
