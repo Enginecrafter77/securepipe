@@ -90,15 +90,21 @@ mod test {
         let mut dec = LZ4DecodingFilter::new();
         let mut enc = LZ4EncodingFilter::new(CompressionMode::FAST(8));
 
-        let mut msg = [0u8; 128];
+        let mut msg = Vec::with_capacity(256);
         let mut buffer = Vec::with_capacity(256);
 
         for _ in 0..256 {
+            let msg_len = (OsRng.try_next_u32().unwrap() % 256) as usize;
+            msg.resize(msg_len, 0);
             OsRng.try_fill_bytes(&mut msg).expect("RNG failed");
+
             buffer.clear();
             buffer.write_all(&msg).expect("Buffer preload failed");
+
             enc.transform(&mut buffer).expect("Encode failed");
             dec.transform(&mut buffer).expect("Decode failed");
+
+            assert_eq!(buffer.len(), msg_len);
             assert_eq!(msg, buffer.as_slice());
         }
     }
