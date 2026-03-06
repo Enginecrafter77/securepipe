@@ -190,6 +190,7 @@ fn main() {
     if m.opt_present("d") {
         info!("Decrypting socket stream to output...");
         let mut pipe = DecodingPump::new(key.as_bytes(), &mut socket, dest.as_mut());
+        pipe.compression = m.opt_present("z");
         pipe.pump_all().expect("IO error");
     } else {
         info!("Encrypting input to socket stream...");
