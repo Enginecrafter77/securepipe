@@ -3,7 +3,7 @@ name = "securepipe"
 description = "A fast and secure means of transferring data between networked machines"
 authors = ["Enginecrafter77"]
 license = "AGPL-3.0-or-later"
-version = "3.0.0"
+version = "3.0.1"
 edition = "2024"
 
 [dependencies]
