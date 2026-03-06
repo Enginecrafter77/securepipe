@@ -173,6 +173,27 @@ mod test {
         assert_eq!(data_arc.as_slice(), decrypted.as_slice());
     }
 
+    fn make_connection(
+        server_config: SecurePipeConfig,
+        client_config: SecurePipeConfig,
+        port: u16,
+    ) -> (anyhow::Result<()>, anyhow::Result<()>) {
+        let server: JoinHandle<anyhow::Result<()>> = spawn(move || {
+            SecurePipePeer::server(server_config, port).connect()?;
+            Ok(())
+        });
+        let client: JoinHandle<anyhow::Result<()>> = spawn(move || {
+            sleep(Duration::from_millis(10));
+            SecurePipePeer::client(client_config, String::from("localhost"), port).connect()?;
+            Ok(())
+        });
+
+        let client_result = client.join().unwrap();
+        let server_result = server.join().unwrap();
+
+        (client_result, server_result)
+    }
+
     #[test]
     fn test_simple() {
         run_through(vec![1, 2, 3, 4, 5, 6], false, 10400);
@@ -214,5 +235,49 @@ mod test {
         let mut data = vec![0u8; 32768];
         OsRng.try_fill_bytes(&mut data).expect("RNG failed");
         run_through(data, true, 10406);
+    }
+
+    #[test]
+    fn test_connect_enc2enc() {
+        let (r1, r2) = make_connection(
+            SecurePipeConfig::new(SecurePipeMode::ENCRYPTING, false),
+            SecurePipeConfig::new(SecurePipeMode::ENCRYPTING, false),
+            10407,
+        );
+        assert!(r1.is_err());
+        assert!(r2.is_err());
+    }
+
+    #[test]
+    fn test_connect_dec2dec() {
+        let (r1, r2) = make_connection(
+            SecurePipeConfig::new(SecurePipeMode::DECRYPTING, false),
+            SecurePipeConfig::new(SecurePipeMode::DECRYPTING, false),
+            10408,
+        );
+        assert!(r1.is_err());
+        assert!(r2.is_err());
+    }
+
+    #[test]
+    fn test_connect_zenc2dec() {
+        let (r1, r2) = make_connection(
+            SecurePipeConfig::new(SecurePipeMode::ENCRYPTING, true),
+            SecurePipeConfig::new(SecurePipeMode::DECRYPTING, false),
+            10409,
+        );
+        assert!(r1.is_err());
+        assert!(r2.is_err());
+    }
+
+    #[test]
+    fn test_connect_enc2zdec() {
+        let (r1, r2) = make_connection(
+            SecurePipeConfig::new(SecurePipeMode::ENCRYPTING, false),
+            SecurePipeConfig::new(SecurePipeMode::DECRYPTING, true),
+            10410,
+        );
+        assert!(r1.is_err());
+        assert!(r2.is_err());
     }
 }
