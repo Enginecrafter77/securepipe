@@ -140,37 +140,97 @@ mod test {
     use rand::{TryRngCore, rngs::OsRng};
 
     use crate::{
-        buffer::BufferedPipe,
+        buffer::{BufferedPipe, BufferedPipeReader, BufferedPipeWriter},
+        filter::crypt::Aes256Key,
         pump::{DecodingPump, EncodingPump, Pump},
     };
+
+    struct TestPipeline {
+        in_pipe_w: BufferedPipeWriter,
+        in_pipe_r: BufferedPipeReader,
+        out_pipe_r: BufferedPipeReader,
+        out_pipe_w: BufferedPipeWriter,
+        sec_pipe_r: BufferedPipeReader,
+        sec_pipe_w: BufferedPipeWriter,
+    }
+
+    struct Testbench<'a> {
+        read_end: &'a mut dyn Read,
+        write_end: &'a mut dyn Write,
+        enc: EncodingPump<'a>,
+        dec: DecodingPump<'a>,
+    }
+
+    impl TestPipeline {
+        fn new(buffer_size: usize) -> Self {
+            let (in_pipe_r, in_pipe_w) = BufferedPipe::new(buffer_size).split();
+            let (out_pipe_r, out_pipe_w) = BufferedPipe::new(buffer_size).split();
+            let (sec_pipe_r, sec_pipe_w) = BufferedPipe::new(buffer_size * 2).split();
+            Self {
+                in_pipe_r,
+                in_pipe_w,
+                out_pipe_r,
+                out_pipe_w,
+                sec_pipe_r,
+                sec_pipe_w,
+            }
+        }
+
+        fn bench<'a>(&'a mut self, key: &Aes256Key) -> Testbench<'a> {
+            let enc = EncodingPump::new(key, &mut self.in_pipe_r, &mut self.sec_pipe_w);
+            let dec = DecodingPump::new(key, &mut self.sec_pipe_r, &mut self.out_pipe_w);
+            Testbench {
+                read_end: &mut self.out_pipe_r,
+                write_end: &mut self.in_pipe_w,
+                enc,
+                dec,
+            }
+        }
+    }
+
+    impl<'a> Read for Testbench<'a> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.read_end.read(buf)
+        }
+    }
+
+    impl<'a> Write for Testbench<'a> {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.write_end.write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.write_end.flush()
+        }
+    }
+
+    impl<'a> Testbench<'a> {
+        fn pump_all(&mut self) -> anyhow::Result<()> {
+            self.enc.pump()?;
+            self.dec.pump()?;
+            Ok(())
+        }
+
+        fn use_compression(&mut self, compress: bool) {
+            self.enc.compression = compress;
+            self.dec.compression = compress;
+        }
+    }
 
     #[test]
     fn test_encryption_pipe_simple() {
         let mut key = [0u8; 32];
         OsRng.try_fill_bytes(&mut key).expect("RNG failed");
 
-        let mut in_pipe = BufferedPipe::new(256);
-        let mut sec_pipe = BufferedPipe::new(256);
-        let mut out_pipe = BufferedPipe::new(256);
+        let mut pipeline = TestPipeline::new(256);
+        let mut bench = pipeline.bench(&key);
 
-        in_pipe
+        bench
             .write_all(b"Hello world!")
             .expect("In pipe write failed");
-
-        // Encrypt stage
-        {
-            let mut enc_pipe = EncodingPump::new(&key, &mut in_pipe, &mut sec_pipe);
-            enc_pipe.pump_all().expect("Encryption failed");
-        }
-
-        // Decrypt stage
-        {
-            let mut dec_pipe = DecodingPump::new(&key, &mut sec_pipe, &mut out_pipe);
-            dec_pipe.pump_all().expect("Decryption failed");
-        }
-
+        bench.pump_all().expect("Pump failed");
         let mut out = String::new();
-        out_pipe
+        bench
             .read_to_string(&mut out)
             .expect("Output readback failed");
 
@@ -182,13 +242,12 @@ mod test {
         let mut key = [0u8; 32];
         OsRng.try_fill_bytes(&mut key).expect("RNG failed");
 
-        let mut in_pipe = BufferedPipe::new(1024);
-        let mut sec_pipe = BufferedPipe::new(2048);
-        let mut out_pipe = BufferedPipe::new(1024);
+        let mut pipeline = TestPipeline::new(1024);
+        let mut bench = pipeline.bench(&key);
 
         let mut input = Vec::new();
         let mut output = Vec::new();
-        for _ in 0..256 {
+        for _ in 0..4096 {
             let in_length = (OsRng.try_next_u32().expect("RNG failed") % 1020) as usize + 4;
             input.resize(in_length, 0);
             output.resize(in_length, 0);
@@ -196,27 +255,58 @@ mod test {
                 .try_fill_bytes(input.as_mut_slice())
                 .expect("RNG failed");
 
-            in_pipe
-                .write_all(input.as_slice())
-                .expect("In pipe write failed");
+            bench.write_all(&input).expect("In pipe write failed");
+            bench.pump_all().expect("Pumping failed");
+            bench.read_exact(&mut output).expect("Readback failed");
 
-            // Encrypt stage
-            {
-                let mut enc_pipe = EncodingPump::new(&key, &mut in_pipe, &mut sec_pipe);
-                enc_pipe.pump_all().expect("Encryption failed");
-            }
+            assert_eq!(input, output);
+        }
+    }
 
-            // Decrypt stage
-            {
-                let mut dec_pipe = DecodingPump::new(&key, &mut sec_pipe, &mut out_pipe);
-                dec_pipe.pump_all().expect("Decryption failed");
-            }
+    #[test]
+    fn test_zpipe_simple() {
+        let mut key = [0u8; 32];
+        OsRng.try_fill_bytes(&mut key).expect("RNG failed");
 
-            let read_len = out_pipe
-                .read(output.as_mut_slice())
-                .expect("Output readback failed");
+        let mut pipeline = TestPipeline::new(256);
+        let mut bench = pipeline.bench(&key);
+        bench.use_compression(true);
 
-            assert_eq!(read_len, in_length);
+        bench
+            .write_all(b"Hello world!")
+            .expect("In pipe write failed");
+        bench.pump_all().expect("Pump failed");
+        let mut out = String::new();
+        bench
+            .read_to_string(&mut out)
+            .expect("Output readback failed");
+
+        assert_eq!("Hello world!", out);
+    }
+
+    #[test]
+    fn test_zpipe_pipe_looped() {
+        let mut key = [0u8; 32];
+        OsRng.try_fill_bytes(&mut key).expect("RNG failed");
+
+        let mut pipeline = TestPipeline::new(1024);
+        let mut bench = pipeline.bench(&key);
+        bench.use_compression(true);
+
+        let mut input = Vec::new();
+        let mut output = Vec::new();
+        for _ in 0..4096 {
+            let in_length = (OsRng.try_next_u32().expect("RNG failed") % 1020) as usize + 4;
+            input.resize(in_length, 0);
+            output.resize(in_length, 0);
+            OsRng
+                .try_fill_bytes(input.as_mut_slice())
+                .expect("RNG failed");
+
+            bench.write_all(&input).expect("In pipe write failed");
+            bench.pump_all().expect("Pumping failed");
+            bench.read_exact(&mut output).expect("Readback failed");
+
             assert_eq!(input, output);
         }
     }

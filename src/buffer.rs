@@ -1,4 +1,7 @@
-use std::io::{self, Read, Write};
+use std::{
+    io::{self, Read, Write},
+    sync::{Arc, Mutex},
+};
 
 #[allow(dead_code)]
 pub struct BufferedPipe {
@@ -6,6 +9,14 @@ pub struct BufferedPipe {
     size: usize,
     read_ptr: usize,
     write_ptr: usize,
+}
+
+pub struct BufferedPipeReader {
+    pipe: Arc<Mutex<BufferedPipe>>,
+}
+
+pub struct BufferedPipeWriter {
+    pipe: Arc<Mutex<BufferedPipe>>,
 }
 
 #[allow(dead_code)]
@@ -37,6 +48,29 @@ impl BufferedPipe {
 
     pub fn free(&self) -> usize {
         self.size - self.available()
+    }
+
+    pub fn split(self) -> (BufferedPipeReader, BufferedPipeWriter) {
+        let pipe = Arc::new(Mutex::new(self));
+        let reader = BufferedPipeReader { pipe: pipe.clone() };
+        let writer = BufferedPipeWriter { pipe };
+        (reader, writer)
+    }
+}
+
+impl Read for BufferedPipeReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.pipe.lock().expect("Locking failed").read(buf)
+    }
+}
+
+impl Write for BufferedPipeWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.pipe.lock().expect("Locking failed").write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.pipe.lock().expect("Locking failed").flush()
     }
 }
 
@@ -173,5 +207,32 @@ mod test {
         let res = pipe.read_exact(&mut piped);
 
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_split_pipe_simple() {
+        let (mut reader, mut writer) = BufferedPipe::new(256).split();
+
+        let mut out = [0u8; 12];
+        writer
+            .write_all(b"Hello world!")
+            .expect("Pipe write failed");
+        reader.read_exact(&mut out).expect("Pipe read failed");
+        assert_eq!(&out, b"Hello world!");
+    }
+
+    #[test]
+    fn test_split_pipe_looping() {
+        let mut orig = [0u8; 32];
+        let mut piped = [0u8; 32];
+        OsRng.try_fill_bytes(&mut orig).expect("RNG failed");
+
+        let (mut reader, mut writer) = BufferedPipe::new(256).split();
+
+        for _ in 0..256 {
+            writer.write_all(&orig).expect("Pipe write failed");
+            reader.read_exact(&mut piped).expect("Pipe read failed");
+            assert_eq!(orig, piped);
+        }
     }
 }
