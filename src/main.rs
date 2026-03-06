@@ -92,37 +92,7 @@ macro_rules! printerrln {
     };
 }
 
-const DESCRIPTION: &str = r"
-The main goal of securepipe is to allow fast and secure transfer of large amounts of data
-between networked machines. Securepipe tries to follow the unix tools principles; the cleartext
-data is read from stdin, and decrypted data is outputed from stdout on the other side, thus allowing
-securepipe to be used in shell pipelines.
-
-Securepipe operates in 4 distinct modes:
-  1. encrypting server
-  2. encrypting client
-  3. decrypting server
-  4. decrypting client
-
-These modes are given by the command line options provided to securepipe. By default, securepipe operates
-in the encryption mode. That is, plaintext data is read from input (stdin by default) and encrypted data are
-sent through the socket. By specifying the -d switch, securepipe can be switched to decrypting mode; that is,
-encrypted data is read from the socket, and decrypted data is written to output (stdout by default).
-
-Whether securepipe acts as a server or client is given by the presence of the host argument. If the host
-argument is missing, securepipe acts as server. That is, it binds to a port on 0.0.0.0 (all interfaces) and
-listens for incoming connections. If the host argument is present, securepipe acts as client; that is, it attempts
-to connect to a listening instance of securepipe running on the given host. By default, securepipe runs on port 4096,
-but one can use a custom port using the -p switch.
-
-By default, securepipe reads data from stdin (encrypting mode) and writes to stdout (decrypting mode). However,
-you can directly read from a file using the -i option, and write the output to a file using the -o option.
-
-A simple example use case:
-(server) machine1: cat /var/log/messages.log | securepipe -vv
-(client) machine2: securepipe -vv -d machine1.local > messages.log
-";
-
+const DESCRIPTION: &str = include_str!("../helpstring.txt");
 const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() {
