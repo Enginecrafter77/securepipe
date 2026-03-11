@@ -135,8 +135,8 @@ mod test {
     fn run_through(data: Vec<u8>, use_compression: bool, port: u16) {
         let data_arc = Arc::new(data);
 
-        let enc_config = SecurePipeConfig::new(SecurePipeMode::ENCRYPTING, use_compression);
-        let dec_config = SecurePipeConfig::new(SecurePipeMode::DECRYPTING, use_compression);
+        let enc_config = SecurePipeConfig::new(SecurePipeMode::Encrypt, use_compression);
+        let dec_config = SecurePipeConfig::new(SecurePipeMode::Decrypt, use_compression);
         let enc_data = data_arc.clone();
         let dec_data = data_arc.clone();
 
@@ -240,8 +240,8 @@ mod test {
     #[test]
     fn test_connect_enc2enc() {
         let (r1, r2) = make_connection(
-            SecurePipeConfig::new(SecurePipeMode::ENCRYPTING, false),
-            SecurePipeConfig::new(SecurePipeMode::ENCRYPTING, false),
+            SecurePipeConfig::new(SecurePipeMode::Encrypt, false),
+            SecurePipeConfig::new(SecurePipeMode::Encrypt, false),
             10407,
         );
         assert!(r1.is_err());
@@ -251,8 +251,8 @@ mod test {
     #[test]
     fn test_connect_dec2dec() {
         let (r1, r2) = make_connection(
-            SecurePipeConfig::new(SecurePipeMode::DECRYPTING, false),
-            SecurePipeConfig::new(SecurePipeMode::DECRYPTING, false),
+            SecurePipeConfig::new(SecurePipeMode::Decrypt, false),
+            SecurePipeConfig::new(SecurePipeMode::Decrypt, false),
             10408,
         );
         assert!(r1.is_err());
@@ -262,8 +262,8 @@ mod test {
     #[test]
     fn test_connect_zenc2dec() {
         let (r1, r2) = make_connection(
-            SecurePipeConfig::new(SecurePipeMode::ENCRYPTING, true),
-            SecurePipeConfig::new(SecurePipeMode::DECRYPTING, false),
+            SecurePipeConfig::new(SecurePipeMode::Encrypt, true),
+            SecurePipeConfig::new(SecurePipeMode::Decrypt, false),
             10409,
         );
         assert!(r1.is_err());
@@ -273,8 +273,8 @@ mod test {
     #[test]
     fn test_connect_enc2zdec() {
         let (r1, r2) = make_connection(
-            SecurePipeConfig::new(SecurePipeMode::ENCRYPTING, false),
-            SecurePipeConfig::new(SecurePipeMode::DECRYPTING, true),
+            SecurePipeConfig::new(SecurePipeMode::Encrypt, false),
+            SecurePipeConfig::new(SecurePipeMode::Decrypt, true),
             10410,
         );
         assert!(r1.is_err());

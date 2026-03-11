@@ -22,8 +22,8 @@ pub struct HandshakeMessage {
 impl HandshakeMessage {
     pub fn new(public_key: PublicKey, config: SecurePipeConfig) -> Self {
         let mode_flag = match config.mode {
-            SecurePipeMode::DECRYPTING => PEER_FLAG_DECRYPT,
-            SecurePipeMode::ENCRYPTING => PEER_FLAG_ENCRYPT,
+            SecurePipeMode::Decrypt => PEER_FLAG_DECRYPT,
+            SecurePipeMode::Encrypt => PEER_FLAG_ENCRYPT,
         };
         let compress_flag = {
             if config.use_compression {
@@ -48,9 +48,9 @@ impl HandshakeMessage {
     pub fn get_config(&self) -> SecurePipeConfig {
         let mode = {
             if (self.flags & PEER_FLAG_DECRYPT) > 0 {
-                SecurePipeMode::DECRYPTING
+                SecurePipeMode::Decrypt
             } else {
-                SecurePipeMode::ENCRYPTING
+                SecurePipeMode::Encrypt
             }
         };
         let use_compression = (self.flags & PEER_FLAG_COMPRESS_LZ4) > 0;
@@ -128,7 +128,7 @@ mod test {
         let mut public_key = [0u8; 32];
         OsRng.try_fill_bytes(&mut public_key).expect("RNG failed");
 
-        let config = SecurePipeConfig::new(SecurePipeMode::ENCRYPTING, true);
+        let config = SecurePipeConfig::new(SecurePipeMode::Encrypt, true);
         let message = HandshakeMessage::new(PublicKey::from(public_key), config.clone());
         assert_eq!(message.get_config(), config);
     }
@@ -138,7 +138,7 @@ mod test {
         let mut public_key = [0u8; 32];
         OsRng.try_fill_bytes(&mut public_key).expect("RNG failed");
 
-        let config = SecurePipeConfig::new(SecurePipeMode::DECRYPTING, true);
+        let config = SecurePipeConfig::new(SecurePipeMode::Decrypt, true);
         let message = HandshakeMessage::new(PublicKey::from(public_key), config.clone());
         assert_eq!(message.get_config(), config);
     }
@@ -148,7 +148,7 @@ mod test {
         let mut public_key = [0u8; 32];
         OsRng.try_fill_bytes(&mut public_key).expect("RNG failed");
 
-        let config = SecurePipeConfig::new(SecurePipeMode::ENCRYPTING, false);
+        let config = SecurePipeConfig::new(SecurePipeMode::Encrypt, false);
         let message = HandshakeMessage::new(PublicKey::from(public_key), config.clone());
         assert_eq!(message.get_config(), config);
     }
@@ -158,7 +158,7 @@ mod test {
         let mut public_key = [0u8; 32];
         OsRng.try_fill_bytes(&mut public_key).expect("RNG failed");
 
-        let config = SecurePipeConfig::new(SecurePipeMode::DECRYPTING, false);
+        let config = SecurePipeConfig::new(SecurePipeMode::Decrypt, false);
         let message = HandshakeMessage::new(PublicKey::from(public_key), config.clone());
         assert_eq!(message.get_config(), config);
     }
@@ -168,7 +168,7 @@ mod test {
         let mut public_key = [0u8; 32];
         OsRng.try_fill_bytes(&mut public_key).expect("RNG failed");
 
-        let config = SecurePipeConfig::new(SecurePipeMode::ENCRYPTING, true);
+        let config = SecurePipeConfig::new(SecurePipeMode::Encrypt, true);
         let message = HandshakeMessage::new(PublicKey::from(public_key), config);
 
         let mut buffer = BufferedPipe::new(256);

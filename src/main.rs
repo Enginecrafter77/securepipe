@@ -89,9 +89,9 @@ fn main() {
 
     let mode = {
         if m.opt_present("d") {
-            SecurePipeMode::DECRYPTING
+            SecurePipeMode::Decrypt
         } else {
-            SecurePipeMode::ENCRYPTING
+            SecurePipeMode::Encrypt
         }
     };
 
@@ -119,7 +119,7 @@ fn main() {
         Some(filename) => Box::new(File::create(filename).expect("Output file open failed")),
     };
 
-    if mode == SecurePipeMode::DECRYPTING {
+    if mode == SecurePipeMode::Decrypt {
         info!("Decrypting socket stream to output...");
         connection.pump_out(dest.as_mut()).expect("IO error");
     } else {
